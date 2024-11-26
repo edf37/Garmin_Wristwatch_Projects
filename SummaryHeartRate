@@ -1,0 +1,101 @@
+# ====================================================
+# Garmin Heart Rate Data Processing Script
+# Author: Evan D. Feigel
+# Purpose: Filter, process, and summarize Garmin HR data across multiple files and save them in output directory
+# Inputs: Directory containing HR data files, optional excluded dates
+# Outputs: Filtered and summarized CSV files by day/night
+# ====================================================
+
+library(dplyr)
+library(lubridate)
+
+# Function to load and preprocess HR data
+load_and_preprocess_data <- function(filepath) {
+    data <- read.csv(filepath)
+
+    # Convert ActivityTime to usable date-time format
+    data$ActivityTime <- as.POSIXct(data$ActivityTime, format = "%m/%d/%Y %I:%M:%S %p", tz = "UTC")
+
+    # Extract time for filtering
+    data$Time <- as.POSIXct(format(data$ActivityTime, "%H:%M:%S"), format = "%H:%M:%S", tz = "UTC")
+
+    return(data)
+}
+
+# Function to exclude specified dates
+exclude_dates <- function(data, dates_to_exclude) {
+    data <- data %>%
+        filter(!as.Date(ActivityTime) %in% as.Date(dates_to_exclude))
+    return(data)
+}
+
+# Function to filter data into daytime and nighttime periods
+filter_by_time_period <- function(data) {
+    # Define time ranges
+    daytime_start <- as.POSIXct("05:00:00", format = "%H:%M:%S", tz = "UTC") # customize to your study design
+    daytime_end <- as.POSIXct("21:59:59", format = "%H:%M:%S", tz = "UTC")
+    nighttime_start <- as.POSIXct("22:00:00", format = "%H:%M:%S", tz = "UTC")
+    nighttime_end <- as.POSIXct("04:59:59", format = "%H:%M:%S", tz = "UTC")
+
+    # Filter for daytime and nighttime data
+    daytime_data <- data[data$Time >= daytime_start & data$Time <= daytime_end, ]
+    nighttime_data <- data[data$Time >= nighttime_start | data$Time <= nighttime_end, ]
+
+    return(list(daytime = daytime_data, nighttime = nighttime_data))
+}
+
+# Function to summarize daily average HR
+summarize_daily_hr <- function(data) {
+    data %>%
+        mutate(Date = as.Date(ActivityTime)) %>%
+        group_by(Date) %>%
+        summarise(AvgHR = mean(HeartRate, na.rm = TRUE))
+}
+
+# Main processing function
+process_hr_files <- function(input_dir, output_dir, excluded_dates = NULL) {
+    # Create output directory if it doesn't exist
+    dir.create(output_dir, showWarnings = FALSE)
+
+    # Get all CSV files in the input directory
+    files <- list.files(input_dir, pattern = "\\.csv$", full.names = TRUE)
+
+    for (file in files) {
+        # Load and preprocess data
+        data <- load_and_preprocess_data(file)
+
+        # Exclude specified dates
+        if (!is.null(excluded_dates)) {
+            data <- exclude_dates(data, excluded_dates)
+        }
+
+        # Filter data into daytime and nighttime
+        filtered_data <- filter_by_time_period(data)
+        daytime_data <- filtered_data$daytime
+        nighttime_data <- filtered_data$nighttime
+
+        # Summarize daily HR for daytime and nighttime
+        daytime_summary <- summarize_daily_hr(daytime_data)
+        nighttime_summary <- summarize_daily_hr(nighttime_data)
+
+        # Generate dynamic filenames based on input file name
+        file_prefix <- tools::file_path_sans_ext(basename(file))
+        write.csv(daytime_data, file.path(output_dir, paste0(file_prefix, "_daytime.csv")), row.names = FALSE)
+        write.csv(nighttime_data, file.path(output_dir, paste0(file_prefix, "_nighttime.csv")), row.names = FALSE)
+        write.csv(daytime_summary, file.path(output_dir, paste0(file_prefix, "_daytime_summary.csv")), row.names = FALSE)
+        write.csv(nighttime_summary, file.path(output_dir, paste0(file_prefix, "_nighttime_summary.csv")), row.names = FALSE)
+    }
+}
+
+# --------------------------
+# Main Workflow
+# --------------------------
+# Set input and output directories
+input_dir <- "D://Project/Subfolder/input_hr_files/" 
+output_dir <- "D://Project/Subfolder/output_hr_files/"
+
+# Specify excluded dates (optional)
+excluded_dates <- c("2024-01-13", "2024-01-14", "2024-01-20", "2024-01-21")
+
+# Process all HR files
+process_hr_files(input_dir, output_dir, excluded_dates)
