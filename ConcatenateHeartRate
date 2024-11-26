@@ -1,0 +1,154 @@
+# ====================================================
+# Continuous Wrist-Worn Heart Rate Monitoring Data Processing Script
+# Author: Evan D. Feigel
+# Purpose: Load, pre-process, process, clean, concatenate, and visualize continuous HR data of participants with identical timestamps
+# Inputs: Directory containing all individual epoch-by-epoch HR data files from the Garmin Instinct Solar (12 Hz) wristwatch
+# Inputs (contd): All HR data files exported by individual participant from external data platform (https://www.fitabase.com/)
+# Outputs: Individual and Concatenated datasets of filtered HR data of participants meeting wear time, CSV files by day/night, plus visual
+# ====================================================
+
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# 1. Data Loading and Pre-processing
+# Load and preprocess HR data from CSV file
+load_hr_data <- function(filepath) {
+    dataset <- read.csv(filepath)
+
+    # Convert ActivityTime to POSIXct for time manipulation
+    dataset$ActivityTime <- as.POSIXct(dataset$ActivityTime, format = "%m/%d/%Y %I:%M:%S %p", tz = "UTC") # Edit 'ActivityTime' for name of time column
+
+    # Remove outliers for HeartRate (reasonable physiological range)
+    dataset <- dataset %>% filter(HeartRate > 30 & HeartRate < 220)
+
+    return(dataset)
+}
+
+# Add 15-second intervals as a counter to dataset
+assign_15_sec_intervals <- function(dataset) {
+    dataset %>%
+        arrange(ActivityTime) %>%
+        group_by(ActivityTime) %>%
+        mutate(SecondsCounter = seq(0, by = 15, length.out = n())) %>%
+        ungroup() %>%
+        mutate(ActivityTime = ActivityTime + SecondsCounter) %>%
+        select(-SecondsCounter)
+}
+
+# 2. Data Processing
+# Calculate missing data proportions
+calculate_missing_data <- function(dataset, common_start_time, common_end_time, exclude_dates) {
+    # Generate expected timestamps and filter out excluded dates
+    all_timestamps <- seq(from = common_start_time, to = common_end_time, by = "15 secs")
+    all_dates <- as.Date(all_timestamps)
+    filtered_timestamps <- all_timestamps[!all_dates %in% exclude_dates] # Exclude dates denoted below
+
+    # Compare actual timestamps with expected ones per participant
+    missing_timestamps <- setdiff(filtered_timestamps, dataset$ActivityTime)
+    total_expected <- length(filtered_timestamps)
+    missing_count <- length(missing_timestamps)
+
+    # Calculate proportions of missing data per participant
+    proportion_missing <- missing_count / total_expected
+    percentage_missing <- proportion_missing * 100
+
+    return(data.frame(ID = unique(dataset$ID), TotalExpected = total_expected,
+                      MissingCount = missing_count, ProportionMissing = proportion_missing,
+                      PercentageMissing = percentage_missing))
+}
+
+# Calculate wear time based on the start and end times and proportion of wear time per participant
+calculate_wear_time <- function(dataset, common_start_time, common_end_time) {
+    total_expected_time <- as.numeric(difftime(common_end_time, common_start_time, units = "secs"))
+    actual_wear_time <- as.numeric(difftime(max(dataset$ActivityTime), min(dataset$ActivityTime), units = "secs"))
+    proportion_wear_time <- actual_wear_time / total_expected_time
+    return(proportion_wear_time)
+}
+
+# Identify common timestamps across all participants, filter by wear time threshold
+identify_common_timestamps_with_wear_time <- function(filtered_datasets, common_start_time, common_end_time, wear_time_threshold = 0.8) {
+    # Calculate wear time proportions for each dataset
+    wear_time_proportions <- sapply(filtered_datasets, function(df) calculate_wear_time(df, common_start_time, common_end_time))
+
+    # Filter out datasets that do not meet the wear time threshold
+    eligible_datasets <- filtered_datasets[sapply(wear_time_proportions, function(proportion) proportion >= wear_time_threshold)]
+
+    # Find the maximum possible common timestamps across eligible datasets of participants who met wear time threshold
+    timestamps_by_id <- lapply(eligible_datasets, function(df) df %>% select(ID, ActivityTime) %>% distinct())
+    names(timestamps_by_id) <- sapply(eligible_datasets, function(df) unique(df$ID))
+    timestamps_list <- lapply(timestamps_by_id, pull, "ActivityTime")
+    common_timestamps <- Reduce(intersect, timestamps_list)
+
+    # Convert common timestamps to POSIXct
+    common_timestamps <- as.POSIXct(common_timestamps, origin = "1970-01-01", tz = "UTC")
+
+    # Filter each dataset based on common timestamps
+    aligned_datasets <- lapply(eligible_datasets, function(df) df %>% filter(ActivityTime %in% common_timestamps))
+
+    # Combine all aligned datasets to form a unified set of participants who wore the device at the same time
+    aligned_combined_dataset <- bind_rows(aligned_datasets)
+
+    return(aligned_combined_dataset)
+}
+
+# 3. Data Visualization
+# Visualize the combined dataset with common timestamps to examine monitoring period
+visualize_data <- function(combined_data) {
+    ggplot(combined_data, aes(ActivityTime, HeartRate)) +
+        geom_line(aes(color = ID)) +
+        facet_wrap(~ ID, scales = "free_y") +
+        theme_minimal() +
+        labs(title = "Heart Rate Over Time by ID", x = "Activity Time", y = "Heart Rate") +
+        theme(legend.position = "none")  # Optionally, hide legend
+}
+
+# 4. Main Workflow - Process all individual particiapnt HR files in a directory and execute functions above
+process_all_files <- function(input_dir, output_dir, excluded_dates, common_start_time, common_end_time, wear_time_threshold = 0.8) {
+    dir.create(output_dir, showWarnings = FALSE)  # Create output directory if not exists
+
+    # List all HR data files in input directory
+    files <- list.files(input_dir, pattern = "\\.csv$", full.names = TRUE)
+    filtered_datasets <- list()  # List to store filtered datasets
+
+    # Process each file
+    for (file in files) {
+        file_prefix <- tools::file_path_sans_ext(basename(file))  # Extract filename for output
+
+        data <- load_hr_data(file)  # Load data from file
+        data <- filter_by_date(data, excluded_dates)  # Filter out excluded dates
+
+        # Filter by daytime and nighttime
+        daytime_data <- filter_by_time(data, daytime_start, daytime_end)
+        nighttime_data <- filter_by_time(data, night_start, night_end)
+
+        filtered_datasets[[file_prefix]] <- daytime_data  # Store daytime data for further processing
+    }
+
+    # Combine datasets based on common timestamps and wear time threshold
+    combined_dataset <- identify_common_timestamps_with_wear_time(filtered_datasets, common_start_time, common_end_time, wear_time_threshold)
+
+    # Visualize combined data
+    visualize_data(combined_dataset)
+
+    # Save the combined dataset
+    write.csv(combined_dataset, file.path(output_dir, "aligned_combined_dataset_filtered.csv"), row.names = FALSE)
+
+    return(combined_dataset)
+}
+
+# --------------------------
+# Main Script Execution
+# --------------------------
+
+# Set parameters and file paths for functions
+input_dir <- "input_hr_files/"
+output_dir <- "output_hr_files/"
+excluded_dates <- c("2024-01-13", "2024-01-14", "2024-01-20", "2024-01-21")  # Example excluded dates (i.e., weekends)
+common_start_time <- as.POSIXct("2024-01-08 13:00:00") # Date and time at start of monitoring period
+common_end_time <- as.POSIXct("2024-02-14 18:00:00") # Date and time at end of monitoring period
+
+# Run the processing function
+final_combined_dataset <- process_all_files(input_dir, output_dir, excluded_dates, common_start_time, common_end_time)
+
