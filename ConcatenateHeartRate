@@ -26,7 +26,7 @@ load_hr_data <- function(filepath) {
     return(dataset)
 }
 
-# Add 15-second intervals as a counter to dataset
+# Add 15-second intervals as a counter to dataset to align with sample frequency (12 Hz) # customize to device
 assign_15_sec_intervals <- function(dataset) {
     dataset %>%
         arrange(ActivityTime) %>%
