@@ -1,0 +1,444 @@
+#############################################################################################
+# Processing Garmin Heart Rate Data for Nonlinear Time Series (NONAN) Heart Rate Analysis: Verifying Valid Datasets, Concatenation, identifying Maximum Identical Timestamps, Individual HR Files for NONAN
+# Author: Evan D. Feigel
+# Date: 11/26/2024
+# Repository: [GitHub Link]
+#############################################################################################
+# Load required libraries
+library(dplyr)
+
+# Set working directory from drive
+setwd("C://Project")
+
+##################################
+# Step 1: Load and Preprocess Exported Raw Heart Rate Data from Fitabase
+##################################
+
+# Function to load and preprocess individual datasets
+load_and_preprocess <- function(file_path, id) {
+    dataset <- read.csv(file_path, header = TRUE) %>%
+        mutate(ID = id,
+               ActivityTime = as.POSIXct(ActivityTime, format = "%m/%d/%Y %H:%M"))
+    return(dataset)
+}
+
+# List of file paths and corresponding IDs
+file_paths <- list.files(pattern = "garminHeartRate.*\\.csv", full.names = TRUE)
+ids <- c("WLC001", "WLC002", "WLC003", "WLC004", "WLC006", "WLC007",
+         "WLC009", "WLC011", "WLC013", "WLC014", "WLC016", "WLC017")
+
+# Load all datasets
+datasets <- mapply(load_and_preprocess, file_paths, ids, SIMPLIFY = FALSE)
+
+##################################
+# Step 2: Add a 15s Counter to Resolve Duplicate Timestamps
+##################################
+
+add_15sec_counter <- function(dataset) {
+    dataset %>%
+        arrange(ActivityTime) %>%
+        group_by(ActivityTime) %>%
+        mutate(SecondsCounter = seq(0, by = 15, length.out = n())) %>%
+        ungroup() %>%
+        mutate(ActivityTime = ActivityTime + SecondsCounter) %>%
+        select(-SecondsCounter)
+}
+
+# Apply to all datasets
+datasets <- lapply(datasets, add_15sec_counter)
+
+##################################
+# Step 3: Filter Datasets Based on Coverage Criteria
+##################################
+
+calculate_coverage <- function(dataset, start_date, end_date, exclude_dates) {
+    dataset <- dataset %>%
+        filter(ActivityTime >= as.POSIXct(start_date) & ActivityTime <= as.POSIXct(end_date)) %>%
+        mutate(Date = as.Date(ActivityTime)) %>%
+        filter(!Date %in% exclude_dates)
+
+    threshold <- 0.8 * 24 * 60 * 60  # 80% of 24 hours in seconds
+
+    daily_coverage <- dataset %>%
+        group_by(Date) %>%
+        summarise(TotalTime = n() * 15) %>%  # 15 seconds per record
+        mutate(PercentCoverage = TotalTime / (24 * 60 * 60))
+
+    days_meeting_coverage <- daily_coverage %>%
+        filter(PercentCoverage >= 0.8) %>%
+        nrow()
+
+    total_days <- as.numeric(difftime(as.Date(end_date), as.Date(start_date), units = "days")) - length(exclude_dates)
+    return(days_meeting_coverage >= 0.5 * total_days)
+}
+
+# Define study dates and weekends to exclude
+start_date <- "2024-01-08" # Start of study monitoring period
+end_date <- "2024-02-14" # End of study monitoring period
+exclude_dates <- as.Date(c("2024-01-13", "2024-01-14", "2024-01-20", "2024-01-21",
+                           "2024-01-27", "2024-01-28", "2024-02-03", "2024-02-04",
+                           "2024-02-10", "2024-02-11")) # Exclude as necessary (i.e., weekends)
+
+# Apply coverage criteria to datasets
+coverage_results <- sapply(datasets, calculate_coverage, start_date, end_date, exclude_dates)
+
+# Filter valid datasets
+valid_datasets <- datasets[coverage_results]
+
+##################################
+# Step 4: Calculate Activity Time Range To Determine Valid Datasets
+##################################
+
+calculate_time_range <- function(dataset) {
+    dataset %>%
+        summarise(StartTime = min(ActivityTime, na.rm = TRUE),
+                  EndTime = max(ActivityTime, na.rm = TRUE))
+}
+
+# Calculate time ranges
+time_ranges <- lapply(valid_datasets, calculate_time_range)
+dataset_ids <- ids[coverage_results]
+time_ranges_df <- do.call(rbind, time_ranges) %>%
+    mutate(ID = dataset_ids) %>%
+    select(ID, everything())
+
+# Print time ranges
+print(time_ranges_df)
+
+##################################
+# Step 5: Filter Data Within Study Time Range
+##################################
+
+filter_by_date_range <- function(dataset, start_date, end_date) {
+    dataset %>%
+        filter(ActivityTime >= as.POSIXct(start_date) & ActivityTime <= as.POSIXct(end_date))
+}
+
+# Apply date filtering
+filtered_datasets <- lapply(valid_datasets, filter_by_date_range,
+                            start_date = as.POSIXct(paste0(start_date, " 13:00:00")),
+                            end_date = as.POSIXct(paste0(end_date, " 18:00:00")))
+
+# Recompute time ranges for filtered data
+filtered_time_ranges <- lapply(filtered_datasets, calculate_time_range)
+filtered_time_ranges_df <- do.call(rbind, filtered_time_ranges) %>%
+    mutate(ID = dataset_ids) %>%
+    select(ID, everything())
+
+# Print filtered time ranges
+print(filtered_time_ranges_df)
+
+#######################
+# Step 6: Combine Filtered, Valid Datasets into One Dataset
+#######################
+library(dplyr)
+
+# Define the date range for filtering
+start_date <- as.POSIXct("2024-01-08 13:00:00")
+end_date <- as.POSIXct("2024-02-14 18:00:00")
+
+# Function to filter datasets by date range
+filter_by_date_range <- function(dataset) {
+    dataset %>%
+        filter(ActivityTime >= start_date & ActivityTime <= end_date)
+}
+
+# Filter valid datasets and remove duplicates
+filtered_datasets <- lapply(valid_datasets, function(df) {
+    df %>%
+        filter_by_date_range() %>%
+        distinct() %>%  # Remove duplicate rows
+        mutate(ActivityTime = as.POSIXct(ActivityTime, origin = "1970-01-01", tz = "UTC"))  # Ensure uniform timestamp format
+})
+
+# Display row count per participant before merging
+lapply(filtered_datasets, function(df) {
+    cat("Participant ID:", unique(df$ID), "Row count:", nrow(df), "\n")
+})
+
+# Combine all filtered datasets into one
+combined_dataset <- bind_rows(filtered_datasets)
+
+# Save the combined dataset to a CSV file
+write.csv(combined_dataset, "combined_filtered_dataset.csv", row.names = FALSE)
+
+# View the first few rows of the combined dataset
+print(head(combined_dataset))
+
+#######################
+# Step 7: Calculate Missing Data for Reporting
+#######################
+# Define the common start and end times for expected timestamps
+common_start_time <- as.POSIXct("2024-01-08 13:00:00")
+common_end_time <- as.POSIXct("2024-02-14 18:00:00")
+
+# List of weekend dates to exclude
+exclude_dates <- as.Date(c("2024-01-13", "2024-01-14", "2024-01-20", "2024-01-21",
+                           "2024-01-27", "2024-01-28", "2024-02-03", "2024-02-04",
+                           "2024-02-10", "2024-02-11"))
+
+# Function to calculate missing data proportions
+calculate_missing_data <- function(dataset) {
+    # Generate expected timestamps at 15-second intervals
+    all_timestamps <- seq(from = common_start_time, to = common_end_time, by = "15 secs")
+
+    # Exclude specified weekend dates
+    filtered_timestamps <- all_timestamps[!as.Date(all_timestamps) %in% exclude_dates]
+
+    # Identify missing timestamps
+    missing_timestamps <- setdiff(filtered_timestamps, dataset$ActivityTime)
+
+    # Calculate expected and missing timestamp counts
+    total_expected <- length(filtered_timestamps)
+    missing_count <- length(missing_timestamps)
+
+    # Calculate missing data proportions
+    proportion_missing <- missing_count / total_expected
+    percentage_missing <- proportion_missing * 100
+
+    # Return a summary dataframe
+    data.frame(
+        ID = unique(dataset$ID),
+        TotalExpected = total_expected,
+        MissingCount = missing_count,
+        ProportionMissing = proportion_missing,
+        PercentageMissing = percentage_missing
+    )
+}
+
+# Calculate missing data for each participant
+missing_data_results <- combined_dataset %>%
+    group_by(ID) %>%
+    group_split() %>%
+    lapply(calculate_missing_data)
+
+# Combine missing data results into a single data frame
+missing_data_df <- do.call(rbind, missing_data_results)
+
+# Print missing data summary
+print(missing_data_df)
+
+# Save missing data results to a CSV file
+write.csv(missing_data_df, "missing_data_standardized.csv", row.names = FALSE)
+
+#######################
+# Step 8: Visualize Combined Data For Overview
+#######################
+library(ggplot2)
+
+# Create a faceted plot for Heart Rate over time by participant ID
+heart_rate_plot <- ggplot(combined_dataset, aes(x = ActivityTime, y = HeartRate)) +
+    geom_line(aes(color = ID), linewidth = 0.8) +  # Use color to differentiate IDs
+    facet_wrap(~ ID, scales = "free_y") +          # Separate plot for each participant with independent y-axis
+    theme_minimal() +
+    labs(
+        title = "Heart Rate Over Time by Participant",
+        x = "Activity Time",
+        y = "Heart Rate"
+    ) +
+    theme(
+        legend.position = "none",       # Hide legend for cleaner visuals
+        strip.text = element_text(size = 10),  # Adjust facet label text size
+        axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels for readability
+    )
+
+# Display the plot
+print(heart_rate_plot)
+
+#######################
+# Step 9: Identify Common Timestamps for Maximum Participant Overlap for NONAN
+#######################
+library(dplyr)
+
+# Combine all filtered datasets into one for processing
+combined_dataset <- bind_rows(filtered_datasets)
+
+# Extract unique timestamps for each participant
+timestamps_by_id <- lapply(filtered_datasets, function(df) {
+    df %>% select(ID, ActivityTime) %>% distinct()
+})
+
+# Name the list elements by participant IDs
+names(timestamps_by_id) <- sapply(filtered_datasets, function(df) unique(df$ID))
+
+# Extract the list of timestamps per participant
+timestamps_list <- lapply(timestamps_by_id, pull, "ActivityTime")
+
+# Find the common timestamps across all participants
+common_timestamps <- Reduce(intersect, timestamps_list)
+
+# Convert the common timestamps to POSIXct format
+common_timestamps <- as.POSIXct(common_timestamps, origin = "1970-01-01", tz = "UTC")
+
+# Function to count the number of common timestamps per participant
+count_common_timestamps <- function(dataset, all_timestamps) {
+    participant_id <- unique(dataset$ID)
+    timestamps <- dataset %>% pull(ActivityTime) %>% unique()
+    common_count <- length(intersect(timestamps, all_timestamps))
+    return(data.frame(ID = participant_id, CommonTimestampCount = common_count))
+}
+
+# Calculate the number of common timestamps for each participant
+common_timestamps_count <- do.call(rbind, lapply(filtered_datasets, function(df) {
+    count_common_timestamps(df, common_timestamps)
+}))
+
+# Find the maximum number of common timestamps
+max_common_count <- max(common_timestamps_count$CommonTimestampCount)
+
+# Function to filter a dataset by the common timestamps
+filter_max_common_timestamps <- function(dataset, common_timestamps) {
+    dataset %>%
+        filter(ActivityTime %in% common_timestamps) %>%
+        distinct()
+}
+
+# Filter each dataset to retain only common timestamps
+aligned_datasets_max_common <- lapply(filtered_datasets, function(df) {
+    filter_max_common_timestamps(df, common_timestamps)
+})
+
+# Combine the aligned datasets into one
+aligned_combined_dataset_max_common <- bind_rows(aligned_datasets_max_common)
+
+# Inspect the aligned combined dataset
+cat("Aligned Combined Dataset Overview:\n")
+print(head(aligned_combined_dataset_max_common))
+cat("Dimensions: ", dim(aligned_combined_dataset_max_common), "\n")
+cat("Unique Participant IDs: ", unique(aligned_combined_dataset_max_common$ID), "\n")
+
+#######################
+# Step 10: Analyze Observations per Participant and Check for Duplicates
+#######################
+library(dplyr)
+
+# Convert ID column to a factor for clarity in grouping
+aligned_combined_dataset_max_common$ID <- as.factor(aligned_combined_dataset_max_common$ID)
+
+# Count the number of observations per participant
+observations_per_participant <- aligned_combined_dataset_max_common %>%
+    group_by(ID) %>%
+    summarize(ObservationCount = n(), .groups = 'drop')
+
+# Print the count of observations for each participant
+cat("Observations per Participant:\n")
+print(observations_per_participant)
+
+# Identify missing values for each variable within each participant
+missing_values_summary <- aligned_combined_dataset_max_common %>%
+    group_by(ID) %>%
+    summarise(across(everything(), ~ sum(is.na(.))), .groups = 'drop')
+
+cat("Missing Values Summary:\n")
+print(missing_values_summary)
+
+# Find participants with any missing values
+ids_with_missing_values <- aligned_combined_dataset_max_common %>%
+    filter(if_any(everything(), is.na)) %>%
+    distinct(ID) %>%
+    pull()
+
+cat("IDs with Missing Values:\n")
+print(ids_with_missing_values)
+
+# Check for duplicate entries within each participant group
+duplicates_within_id <- aligned_combined_dataset_max_common %>%
+    group_by(ID) %>%
+    filter(duplicated(ActivityTime) | duplicated(ActivityTime, fromLast = TRUE))
+
+cat("Duplicate Entries within IDs:\n")
+print(duplicates_within_id)
+
+# Summarize duplicate counts by participant
+duplicates_summary <- duplicates_within_id %>%
+    group_by(ID) %>%
+    summarise(DuplicateCount = n(), .groups = 'drop')
+
+cat("Summary of Duplicate Counts per Participant:\n")
+print(duplicates_summary)
+
+# Remove duplicate ActivityTime entries, keeping unique rows
+df_cleaned <- aligned_combined_dataset_max_common %>%
+    group_by(ID) %>%
+    distinct(ActivityTime, .keep_all = TRUE) %>%
+    ungroup()
+
+cat("Cleaned Dataset Overview:\n")
+print(head(df_cleaned))
+
+# Count unique ActivityTime values for each participant in the cleaned dataset
+unique_counts <- df_cleaned %>%
+    group_by(ID) %>%
+    summarise(UniqueActivityTimes = n_distinct(ActivityTime), .groups = 'drop')
+
+cat("Unique Activity Times per Participant:\n")
+print(unique_counts)
+
+# Count observations per participant after cleaning
+observations_per_participant_cleaned <- df_cleaned %>%
+    group_by(ID) %>%
+    summarize(ObservationCount = n(), .groups = 'drop')
+
+cat("Observations per Participant (Cleaned):\n")
+print(observations_per_participant_cleaned)
+
+# Save the cleaned observations and cleaned dataset to CSV files
+write.csv(observations_per_participant_cleaned, "observations_per_participant.csv", row.names = FALSE)
+write.csv(df_cleaned, "WLC_HR_Clean.csv", row.names = FALSE)
+
+# Calculate the average number of observations per participant
+average_observations_per_participant <- observations_per_participant_cleaned %>%
+    summarise(AverageObservationCount = mean(ObservationCount)) %>%
+    pull(AverageObservationCount)
+
+# Print the average number of observations
+cat("Average Number of Observations per Participant:\n")
+print(average_observations_per_participant)
+
+##############
+# Step 11: Determine Total Expected Observations
+##############
+# Define start and end times
+start_time <- as.POSIXct("2024-01-08 13:00:00", tz = "UTC")
+end_time <- as.POSIXct("2024-02-12 19:00:00", tz = "UTC")
+
+# Calculate total duration and observations
+duration_seconds <- as.numeric(difftime(end_time, start_time, units = "secs"))
+interval_seconds <- 15  # Interval between observations in seconds
+total_observations <- duration_seconds / interval_seconds
+
+# Output the result
+cat("Total number of expected observations:", total_observations, "\n")
+
+##############
+# Step 12: Visualize Cleaned Data
+##############
+library(ggplot2)
+
+# Create a time-series plot with facets for each participant
+ggplot(df_cleaned, aes(x = ActivityTime, y = HeartRate, color = ID)) +
+    geom_line() +
+    facet_wrap(~ ID, scales = "free_y") +
+    theme_minimal() +
+    labs(title = "Heart Rate Over Time by ID",
+         x = "Activity Time",
+         y = "Heart Rate") +
+    theme(legend.position = "none")  # Optionally hide the legend
+
+##############
+# Step 13: Create Individual Datasets by ID for Subsequent NONAN
+##############
+library(dplyr)
+
+# Get the list of unique IDs in the dataset
+unique_ids <- unique(df_cleaned$ID)
+
+# Create and save individual datasets for each ID
+for (id in unique_ids) {
+    individual_data <- df_cleaned %>% filter(ID == id)
+    file_name <- paste0(id, ".csv")
+    write.csv(individual_data, file_name, row.names = FALSE)
+}
+
+cat("Individual datasets created for the following IDs:\n")
+print(unique_ids)
