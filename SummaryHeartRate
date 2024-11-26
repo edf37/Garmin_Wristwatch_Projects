@@ -1,5 +1,5 @@
 # ====================================================
-# Garmin Heart Rate Data Processing Script
+# Summarizing Heart Rate Data into Daily Means Script
 # Author: Evan D. Feigel
 # Purpose: Filter, process, and summarize Garmin HR data across multiple files and save them in output directory
 # Inputs: Directory containing HR data files, optional excluded dates
