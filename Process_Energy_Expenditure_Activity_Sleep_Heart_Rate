@@ -1,0 +1,91 @@
+# ====================================================
+# Garmin Energy Expenditure, Activity, Sleep, and Heart Rate Data Processing and Summarization Script
+# Author: Evan D. Feigel
+# Purpose: Process, summarize, and combine Garmin activity, sleep, and HR data into a combined file
+# Inputs: CSV files for activity logs, sleep logs, and HR data
+# Outputs: Summarized files by participant and day, combined datasets
+# ====================================================
+
+library(dplyr)
+library(lubridate)
+
+# Function to load and preprocess data
+load_and_preprocess <- function(filepath, date_column, tz = "UTC") {
+    data <- read.csv(filepath)
+    
+    # Convert date column to POSIXct and add date-only column
+    data[[date_column]] <- as.POSIXct(data[[date_column]], format = "%m/%d/%Y %I:%M %p", tz = tz)
+    data$ActivityDate <- as.Date(data[[date_column]])
+    
+    return(data)
+}
+
+# Function to summarize daily metrics
+summarize_daily <- function(data, group_vars, metrics, na_handling = TRUE) {
+    data %>%
+        group_by(across(all_of(group_vars))) %>%
+        summarise(across(
+            all_of(metrics), 
+            list(
+                total = ~ sum(.x, na.rm = na_handling),
+                avg = ~ mean(.x, na.rm = na_handling)
+            ),
+            .names = "{.col}_{.fn}"
+        ), .groups = "drop")
+}
+
+# Function to process all files in a directory matching a pattern
+process_files_in_directory <- function(input_dir, pattern, date_column, output_dir, prefix, summary_vars, metrics) {
+    files <- list.files(input_dir, pattern = pattern, full.names = TRUE)
+    combined_data <- lapply(files, function(file) {
+        data <- load_and_preprocess(file, date_column)
+        summarized <- summarize_daily(data, group_vars = c("ActivityDate"), metrics = metrics)
+        write.csv(summarized, file.path(output_dir, paste0(prefix, basename(file))), row.names = FALSE)
+        summarized
+    })
+    combined_data <- bind_rows(combined_data)
+    write.csv(combined_data, file.path(output_dir, paste0(prefix, "combined.csv")), row.names = FALSE)
+}
+
+# Main Workflow
+main <- function() {
+    # Set input/output directories
+    input_dir <- "D://Project//Subfolder"
+    output_dir <- "D://Project//Subfolder/Summaries"
+    dir.create(output_dir, showWarnings = FALSE)
+    
+    # Activity Log Processing
+    process_files_in_directory(
+        input_dir = input_dir,
+        pattern = "garminEpochLog.*\\.csv",
+        date_column = "ActivityDateTime",
+        output_dir = output_dir,
+        prefix = "activity_summary_",
+        summary_vars = c("ActivityDate"),
+        metrics = c("ActiveKilocalories", "Steps", "DistanceInMeters", "ActiveTimeInSeconds", "AverageMETs")
+    )
+    
+    # Sleep Log Processing
+    process_files_in_directory(
+        input_dir = input_dir,
+        pattern = "garminSleep.*\\.csv",
+        date_column = "ActivityDateTime",
+        output_dir = output_dir,
+        prefix = "sleep_summary_",
+        summary_vars = c("ActivityDate"),
+        metrics = c("DeepSleepDurationInSeconds", "LightSleepDurationInSeconds", "RemSleepInSeconds")
+    )
+    
+    # Combine Summaries
+    combine_summaries(output_dir, "summarized_", output_dir, "combined_summaries.csv")
+}
+
+# Function to combine multiple summary files
+combine_summaries <- function(input_dir, pattern, output_dir, output_file) {
+    files <- list.files(input_dir, pattern = paste0("^", pattern), full.names = TRUE)
+    combined_data <- bind_rows(lapply(files, read.csv))
+    write.csv(combined_data, file.path(output_dir, output_file), row.names = FALSE)
+}
+
+# Run the script
+main()
