@@ -1,7 +1,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % REQUIREMENTS: University of Nebraska, Omaha Biomechanics Repository DFA Functions (see their github for packages and function downloads - https://github.com/Nonlinear-Analysis-Core/NONANLibrary) loaded into your directory.
 % Detrended Fluctuation Analysis Script Calculates Nonlinear Heart Rate Variability of Daily Timestamp-Matched Heart Rate Data.
-% This code follows the Process_NONAN script.
+% This code follows the Process_Nonlinear_Heart_Rate_Time_Series_Data script.
 % Folder setup: Have participant folders individually marked within FinalHROCS as P_*ID* and actually write their ID; within that folder have another folder OCS*ID* that houses heart rate .csv data.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clear
