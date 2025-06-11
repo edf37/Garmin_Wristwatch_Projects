@@ -1,0 +1,300 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% REQUIREMENTS: University of Nebraska, Omaha Biomechanics Repository DFA Functions (see their github for packages and function downloads - https://github.com/Nonlinear-Analysis-Core/NONANLibrary) loaded into your directory.
+% Detrended Fluctuation Analysis Script Calculates Nonlinear Heart Rate Variability of Daily Timestamp-Matched Heart Rate Data.
+% This code follows the Process_NONAN script.
+% Folder setup: Have participant folders individually marked within FinalHROCS as P_*ID* and actually write their ID; within that folder have another folder OCS*ID* that houses heart rate .csv data.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+clear
+clc
+
+% Define the main directory containing the participants' folders of time-stamp-matched, standardized heart rate data
+mainDir = 'C:\evand\FinalHROCS';
+
+% Initialize an empty table to store the combined results
+combinedResults = table();
+
+% Get a list of all participant folders
+participants = dir(fullfile(mainDir, 'P_*'));
+
+% Loop through each participant folder
+for p = 1:length(participants)
+    participantFolder = fullfile(mainDir, participants(p).name);
+    
+    % Extract participant ID from folder name
+    participantID = participants(p).name; % Assuming folder name is participant ID
+    
+    % Define the lap folders
+    lapFolders = dir(fullfile(participantFolder, 'OCS*'));
+    
+    % Loop through each lap folder
+    for l = 1:length(lapFolders)
+        lapFolder = fullfile(participantFolder, lapFolders(l).name);
+        
+        % Check if lapFolder exists
+        if ~exist(lapFolder, 'dir')
+            fprintf('Lap folder not found: %s\n', lapFolder);
+            continue; % Skip to the next lap folder if the directory does not exist
+        end
+        
+        % Define pattern for WLC CSV files within the lap folder
+        csvFilesPattern = fullfile(lapFolder, '1*.csv');
+        csvFiles = dir(csvFilesPattern);
+        
+        % Initialize table to hold all data for the day
+        dailyData = table();
+        
+        % Loop through each CSV file
+        for f = 1:length(csvFiles)
+            csvFile = fullfile(lapFolder, csvFiles(f).name);
+            
+            % Read the CSV file (assumes first column is datetime, second column is heart rate)
+            tempData = readtable(csvFile);
+            
+            % Combine data
+            dailyData = [dailyData; tempData];
+        end
+        
+        % Ensure the DateTime column is present and in datetime format
+        if any(strcmp(dailyData.Properties.VariableNames, 'ActivityTime'))
+            dailyData.ActivityTime = datetime(dailyData.ActivityTime, 'InputFormat', 'yyyy-MM-dd HH:mm:ss');
+        else
+            fprintf('ActivityTime column not found in file: %s\n', lapFolder);
+            continue;
+        end
+        
+        % Extract unique days from the datetime column
+        uniqueDates = unique(dateshift(dailyData.ActivityTime, 'start', 'day'));
+        
+       % Process each unique day
+        for u = 1:length(uniqueDates)
+        dayStart = uniqueDates(u);
+        dayEnd = dayStart + days(1);
+    
+        % Filter data for the current day
+        dayData = dailyData(dailyData.ActivityTime >= dayStart & dailyData.ActivityTime < dayEnd, :);
+    
+        % Check if there is enough data for DFA
+        if height(dayData) < 16
+        % Convert dayStart to string safely
+        if isnat(dayStart) || isempty(dayStart)
+            fprintf('Invalid or missing date for participant %s. Skipping.\n', participantID);
+            continue;
+        end
+        
+        % Convert datetime to string format safely
+        dateStr = string(dayStart, 'yyyy-MM-dd');
+        fprintf('Not enough data for DFA on %s for participant %s\n', dateStr, participantID);
+        continue;
+    end
+
+    % Assuming heart rate data are in the second column
+    ts = dayData{:, 2};
+    
+    % Check for the length of ts to ensure scales can be calculated properly
+    if length(ts) < 16
+        fprintf('Time series too short for meaningful DFA analysis on %s for participant %s\n', dateStr, participantID);
+        continue;
+    end
+
+            % Define DFA parameters
+            n_min = 16;
+            n_max = length(ts) / 9;
+            n_length = 18;
+            scales = [10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120];
+            order = 1;
+            
+            % Calculate maximum permissible scale
+            max_scale = length(ts) / 9;
+
+            % Adjust scales dynamically based on the length of the time series
+            scales = scales(scales <= max_scale);
+
+            if isempty(scales)
+                fprintf('Time series too short for any scale. Skipping.\n');
+                continue;
+            end
+
+            % Check the size of the input time series and scales
+            fprintf('Processing DFA for participant %s on %s with %d data points.\n', participantID, datestr(dayStart), length(ts));
+
+            try
+                % Run DFA analysis
+                [s, f, alpha] = dfa(ts, scales, order, 1);
+            catch ME
+                fprintf('Error in DFA analysis for participant %s on %s: %s\n', participantID, datestr(dayStart), ME.message);
+                continue;
+            end
+
+            % Create a table for the current results
+            resultTable = table(alpha, 'VariableNames', {'Alpha'});
+            try
+                resultTable.Date = repmat({datestr(dayStart, 'yyyy-mm-dd')}, height(resultTable), 1);
+            catch ME
+                fprintf('Error converting dayStart to string for participant %s: %s\n', participantID, ME.message);
+                continue;
+            end
+            resultTable.ID = repmat({participantID}, height(resultTable), 1);
+
+            % Add the contents of the current day to the combinedResults table
+            combinedResults = [combinedResults; resultTable];
+        end
+    end
+end
+
+% Define the path for the combined DFA results CSV file
+combinedCsvFile = fullfile(mainDir, 'Conjoined_OCS_DFA_Output_All_Participants_2022_2023.csv');
+
+% Write the combined results to a CSV file
+writetable(combinedResults, combinedCsvFile);
+
+fprintf('Combined DFA results have been saved to: %s\n', combinedCsvFile);
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Detrended Fluctuation Analysis for Daytime HR Only (0600-2159)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+clear
+clc
+
+% Define the main directory containing the participants' folders
+mainDir = 'C:\evand\FinalHRWLC';
+
+% Initialize an empty table to store the combined results
+combinedResults = table();
+
+% Get a list of all participant folders
+participants = dir(fullfile(mainDir, 'P_*'));
+
+% Loop through each participant folder
+for p = 1:length(participants)
+    participantFolder = fullfile(mainDir, participants(p).name);
+    
+    % Extract participant ID from folder name
+    participantID = participants(p).name; % Assuming folder name is participant ID
+    
+    % Define the lap folders
+    lapFolders = dir(fullfile(participantFolder, 'WLC*'));
+    
+    % Loop through each lap folder
+    for l = 1:length(lapFolders)
+        lapFolder = fullfile(participantFolder, lapFolders(l).name);
+        
+        % Check if lapFolder exists
+        if ~exist(lapFolder, 'dir')
+            fprintf('Lap folder not found: %s\n', lapFolder);
+            continue; % Skip to the next lap folder if the directory does not exist
+        end
+        
+        % Define pattern for WLC CSV files within the lap folder
+        csvFilesPattern = fullfile(lapFolder, 'WLC*.csv');
+        csvFiles = dir(csvFilesPattern);
+        
+        % Initialize table to hold all data for the day
+        dailyData = table();
+        
+        % Loop through each CSV file
+        for f = 1:length(csvFiles)
+            csvFile = fullfile(lapFolder, csvFiles(f).name);
+            
+            % Read the CSV file (assumes first column is datetime, second column is heart rate)
+            tempData = readtable(csvFile);
+            
+            % Combine data
+            dailyData = [dailyData; tempData];
+        end
+        
+        % Ensure the DateTime column is present and in datetime format
+        if any(strcmp(dailyData.Properties.VariableNames, 'ActivityTime'))
+            dailyData.ActivityTime = datetime(dailyData.ActivityTime, 'InputFormat', 'yyyy-MM-dd HH:mm:ss');
+        else
+            fprintf('ActivityTime column not found in file: %s\n', lapFolder);
+            continue;
+        end
+        
+        % Extract unique days from the datetime column
+        uniqueDates = unique(dateshift(dailyData.ActivityTime, 'start', 'day'));
+        
+        % Process each unique day
+        for u = 1:length(uniqueDates)
+            dayStart = uniqueDates(u);
+            dayEnd = dayStart + days(1);
+        
+            % Filter data for the current day
+            dayData = dailyData(dailyData.ActivityTime >= dayStart & dailyData.ActivityTime < dayEnd, :);
+            
+            % Filter data between 6 am and 10 pm
+            dayData = dayData(hour(dayData.ActivityTime) >= 6 & hour(dayData.ActivityTime) < 22, :);
+
+            % Check if there is enough data for DFA
+            if height(dayData) < 16
+                % Convert dayStart to string safely
+                if isnat(dayStart) || isempty(dayStart)
+                    fprintf('Invalid or missing date for participant %s. Skipping.\n', participantID);
+                    continue;
+                end
+                
+                % Convert datetime to string format safely
+                dateStr = string(dayStart, 'yyyy-MM-dd');
+                fprintf('Not enough data for DFA on %s for participant %s\n', dateStr, participantID);
+                continue;
+            end
+
+            % Assuming heart rate data are in the second column
+            ts = dayData{:, 2};
+            
+            % Check for the length of ts to ensure scales can be calculated properly
+            if length(ts) < 16
+                fprintf('Time series too short for meaningful DFA analysis on %s for participant %s\n', dateStr, participantID);
+                continue;
+            end
+
+            % Define DFA parameters
+            n_min = 16;
+            n_max = length(ts) / 9;
+            n_length = 18;
+            scales = [10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120];
+            order = 1;
+            
+            % Calculate maximum permissible scale
+            max_scale = length(ts) / 9;
+
+            % Adjust scales dynamically based on the length of the time series
+            scales = scales(scales <= max_scale);
+
+            if isempty(scales)
+                fprintf('Time series too short for any scale. Skipping.\n');
+                continue;
+            end
+
+            % Check the size of the input time series and scales
+            fprintf('Processing DFA for participant %s on %s with %d data points.\n', participantID, datestr(dayStart), length(ts));
+
+            try
+                % Run DFA analysis
+                [s, f, alpha] = dfa(ts, scales, order, 1);
+            catch ME
+                fprintf('Error in DFA analysis for participant %s on %s: %s\n', participantID, datestr(dayStart), ME.message);
+                continue;
+            end
+
+            % Create a table for the current results
+            resultTable = table(alpha, 'VariableNames', {'Alpha'});
+            try
+                resultTable.Date = repmat({datestr(dayStart, 'yyyy-mm-dd')}, height(resultTable), 1);
+            catch ME
+                fprintf('Error converting dayStart to string for participant %s: %s\n', participantID, ME.message);
+                continue;
+            end
+            resultTable.ID = repmat({participantID}, height(resultTable), 1);
+
+            % Add the contents of the current day to the combinedResults table
+            combinedResults = [combinedResults; resultTable];
+        end
+    end
+end
+
+% Define the path for the combined DFA results CSV file
+combinedCsvFile = fullfile(mainDir, 'Conjoined_DFA_Output_DaytimeHR_All_Participants.csv');
+
+% Write the combined results to a CSV file
+writetable(combinedResults, combinedCsvFile);
+
+fprintf('Combined DFA results have been saved to: %s\n', combinedCsvFile);
