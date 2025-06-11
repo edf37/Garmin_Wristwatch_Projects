@@ -1,0 +1,179 @@
+# Merging HR data into mean HR, raw and absolute change in mean HR by participant
+# Aim is to merge ActivityTime column data into Days which can then average all remaining columns
+
+library(dplyr)
+library(lubridate)
+
+# Daytime HR 0500-2159; Sleeping HR 2200-0459
+# Convert ActivityTime to usable date-time format
+# Assuming your data is in a data frame 
+data <- WLC001_garminHeartRate_20240101_20240220 # Loaded individual raw heart rate data
+
+# Convert ActivityTime to usable date-time format
+data$ActivityTime <- as.POSIXct(data$ActivityTime, format = "%m/%d/%Y %I:%M:%S %p")
+
+# Display the first few rows of the converted data
+head(data)
+###############
+#Filter to daytime and sleeping
+# Assuming your data is in a data frame 
+data <- WLC001_garminHeartRate_20240101_20240220
+
+# Convert ActivityTime to usable date-time format
+data$ActivityTime <- as.POSIXct(data$ActivityTime, format = "%m/%d/%Y %I:%M:%S %p", tz = "UTC")
+
+# Extract the time part in hours, minutes, and seconds
+data$Time <- format(data$ActivityTime, "%H:%M:%S")
+
+# Define the start and end times for daytime and sleeping periods
+daytime_start <- as.POSIXct("05:00:00", format="%H:%M:%S", tz="UTC")
+daytime_end <- as.POSIXct("21:59:59", format="%H:%M:%S", tz="UTC")
+sleep_start <- as.POSIXct("22:00:00", format="%H:%M:%S", tz="UTC")
+sleep_end <- as.POSIXct("04:59:59", format="%H:%M:%S", tz="UTC")
+
+# Convert the Time column to POSIXct with an arbitrary date for comparison
+data$Time <- as.POSIXct(data$Time, format="%H:%M:%S", tz="UTC")
+
+# Filter daytime heart rate data
+daytime_data <- data[data$Time >= daytime_start & data$Time <= daytime_end, ]
+
+# Filter sleeping heart rate data
+# Handle the wrap around midnight for sleeping time
+sleeping_data <- data[data$Time >= sleep_start | data$Time <= sleep_end, ]
+
+# Display filtered data
+head(daytime_data)
+head(sleeping_data)
+
+write.csv(daytime_data, "daytime_hr_wlc001_hr_.csv", row.names = FALSE)
+write.csv(sleeping_data, "sleeping_hr_wlc001_hr_.csv", row.names = FALSE)
+########
+#Create day and sleep averages
+# Extract date part for grouping
+daytime_data$Date <- as.Date(daytime_data$ActivityTime)
+sleeping_data$Date <- as.Date(sleeping_data$ActivityTime)
+
+# Load necessary library
+library(dplyr)
+
+# Calculate daily average HR for daytime period
+daytime_avg_hr <- daytime_data %>%
+    group_by(Date) %>%
+    summarise(AvgHR = mean(HeartRate, na.rm = TRUE))
+
+# Calculate daily average HR for sleeping period
+sleeping_avg_hr <- sleeping_data %>%
+    group_by(Date) %>%
+    summarise(AvgHR = mean(HeartRate, na.rm = TRUE))
+
+# Display the results
+print(daytime_avg_hr)
+print(sleeping_avg_hr)
+
+write.csv(daytime_avg_hr, "daytime_summary_hr_WLC001.csv", row.names = FALSE)
+write.csv(daytime_avg_hr, "sleeping_summary_hr_WLC001.csv", row.names = FALSE)
+#######################
+#Project  using Matlab NONAN Course - cutting down this dataset to days (daytime HR, sleeping HR)
+data <- daytime_hr_wlc003_hr_
+
+# Load necessary library for date manipulation
+library(dplyr)
+library(lubridate)
+
+# Ensure the ActivityTime is in POSIXct format
+data$ActivityTime <- as.POSIXct(data$ActivityTime, format="%Y-%m-%d %H:%M:%S")
+
+# Define the date and time range for the specific day
+start_datetime <- as.POSIXct("2024-02-12 00:04:59")
+end_datetime <- as.POSIXct("2024-02-12 21:59:59")
+
+# Filter the data for the specific date and time range
+wlc001daytimehr36 <- data %>%
+    filter(ActivityTime >= start_datetime & ActivityTime <= end_datetime)
+
+# Print the first few rows of the filtered data for verification
+print(head(wlc001daytimehr36))
+
+# Write the filtered data to a CSV file
+write.csv(wlc001daytimehr36, "wlc001daytimehr36.csv", row.names = FALSE)
+
+###########
+#Looping function to filter data by single days and daytime HR (0500-2159)
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+
+# Assign the dataset to the 'data' variable
+data <- daytime_hr_wlc017_hr_
+
+# Ensure the ActivityTime is in POSIXct format
+data$ActivityTime <- as.POSIXct(data$ActivityTime, format="%Y-%m-%d %H:%M:%S")
+
+# Define the start and end dates for the loop
+start_date <- as.POSIXct("2024-01-08 00:05:00")
+end_date <- as.POSIXct("2024-02-12 23:59:59")
+
+# Loop through each day from start_date to end_date
+current_date <- start_date
+while (current_date <= end_date) {
+    # Define the start and end datetime for the current day
+    start_datetime <- as.POSIXct(format(current_date, "%Y-%m-%d 00:05:00"))
+    end_datetime <- as.POSIXct(format(current_date, "%Y-%m-%d 21:59:59"))
+
+    # Filter the data for the specific date and time range
+    filtered_data <- data %>%
+        filter(ActivityTime >= start_datetime & ActivityTime <= end_datetime)
+
+    # Create the filename based on the current date
+    date_string <- format(current_date, "%Y-%m-%d")
+    filename <- paste0("wlc017daytimehr_", date_string, ".csv")
+
+    # Write the filtered data to a CSV file
+    write.csv(filtered_data, filename, row.names = FALSE)
+
+    # Print a message indicating progress
+    print(paste("Saved file:", filename))
+
+    # Move to the next day
+    current_date <- current_date + days(1)
+}
+##################################################################
+#Looping function to filter data by single nights (sleeping HR = 2200-0459)
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+
+# Assign the dataset to the 'data' variable
+data <- sleeping_hr_wlc017_hr_
+
+# Ensure the ActivityTime is in POSIXct format
+data$ActivityTime <- as.POSIXct(data$ActivityTime, format="%Y-%m-%d %H:%M:%S")
+
+# Define the start and end dates for the loop
+start_date <- as.POSIXct("2024-01-08 22:00:00")
+end_date <- as.POSIXct("2024-02-12 00:04:59")
+
+# Loop through each day from start_date to end_date
+current_date <- start_date
+while (current_date <= end_date) {
+    # Define the start and end datetime for the current day
+    start_datetime <- as.POSIXct(format(current_date, "%Y-%m-%d 22:00:00"))
+    end_datetime <- as.POSIXct(format(current_date, "%Y-%m-%d 00:04:59"))
+
+    # Filter the data for the specific date and time range
+    filtered_data <- data %>%
+        filter(ActivityTime >= start_datetime & ActivityTime <= end_datetime)
+
+    # Create the filename based on the current date
+    date_string <- format(current_date, "%Y-%m-%d")
+    filename <- paste0("wlc017sleepinghr_", date_string, ".csv")
+
+    # Write the filtered data to a CSV file
+    write.csv(filtered_data, filename, row.names = FALSE)
+
+    # Print a message indicating progress
+    print(paste("Saved file:", filename))
+
+    # Move to the next day
+    current_date <- current_date + days(1)
+}
